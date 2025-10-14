@@ -6,19 +6,18 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/golang/protobuf/proto"
-	pb "github.com/golang/protobuf/protoc-gen-go/descriptor"
-	"github.com/micro/micro/v3/cmd/protoc-gen-micro/generator"
+	"github.com/micro/micro/v5/cmd/protoc-gen-micro/generator"
 	options "google.golang.org/genproto/googleapis/api/annotations"
+	"google.golang.org/protobuf/proto"
+	pb "google.golang.org/protobuf/types/descriptorpb"
 )
 
 // Paths for packages used by code generated in this file,
 // relative to the import_prefix of the generator.Generator.
 const (
-	apiPkgPath     = "github.com/micro/micro/v3/service/api"
 	contextPkgPath = "context"
-	clientPkgPath  = "github.com/micro/micro/v3/service/client"
-	serverPkgPath  = "github.com/micro/micro/v3/service/server"
+	clientPkgPath  = "go-micro.dev/v5/client"
+	serverPkgPath  = "go-micro.dev/v5/server"
 )
 
 func init() {
@@ -40,7 +39,6 @@ func (g *micro) Name() string {
 // They may vary from the final path component of the import path
 // if the name is used by other packages.
 var (
-	apiPkg     string
 	contextPkg string
 	clientPkg  string
 	serverPkg  string
@@ -50,7 +48,6 @@ var (
 // Init initializes the plugin.
 func (g *micro) Init(gen *generator.Generator) {
 	g.gen = gen
-	apiPkg = generator.RegisterUniquePackageName("api", nil)
 	contextPkg = generator.RegisterUniquePackageName("context", nil)
 	clientPkg = generator.RegisterUniquePackageName("client", nil)
 	serverPkg = generator.RegisterUniquePackageName("server", nil)
@@ -77,7 +74,6 @@ func (g *micro) Generate(file *generator.FileDescriptor) {
 		return
 	}
 	g.P("// Reference imports to suppress errors if they are not otherwise used.")
-	g.P("var _ ", apiPkg, ".Endpoint")
 	g.P("var _ ", contextPkg, ".Context")
 	g.P("var _ ", clientPkg, ".Option")
 	g.P("var _ ", serverPkg, ".Option")
@@ -94,7 +90,6 @@ func (g *micro) GenerateImports(file *generator.FileDescriptor, imports map[gene
 		return
 	}
 	g.P("import (")
-	g.P(apiPkg, " ", strconv.Quote(path.Join(g.gen.ImportPrefix, apiPkgPath)))
 	g.P(contextPkg, " ", strconv.Quote(path.Join(g.gen.ImportPrefix, contextPkgPath)))
 	g.P(clientPkg, " ", strconv.Quote(path.Join(g.gen.ImportPrefix, clientPkgPath)))
 	g.P(serverPkg, " ", strconv.Quote(path.Join(g.gen.ImportPrefix, serverPkgPath)))
@@ -131,7 +126,8 @@ func (g *micro) generateService(file *generator.FileDescriptor, service *pb.Serv
 
 	origServName := service.GetName()
 	serviceName := strings.ToLower(service.GetName())
-	if pkg := file.GetPackage(); pkg != "" {
+	pkg := file.GetPackage()
+	if pkg != "" {
 		serviceName = pkg
 	}
 	servName := generator.CamelCase(origServName)
@@ -141,23 +137,6 @@ func (g *micro) generateService(file *generator.FileDescriptor, service *pb.Serv
 	if strings.HasSuffix(servAlias, "ServiceService") {
 		servAlias = strings.TrimSuffix(servAlias, "Service")
 	}
-
-	g.P()
-	g.P("// Api Endpoints for ", servName, " service")
-	g.P()
-
-	g.P("func New", servName, "Endpoints () []*", apiPkg, ".Endpoint {")
-	g.P("return []*", apiPkg, ".Endpoint{")
-	for _, method := range service.Method {
-		if method.Options != nil && proto.HasExtension(method.Options, options.E_Http) {
-			g.P("&", apiPkg, ".Endpoint{")
-			g.generateEndpoint(servName, method)
-			g.P("},")
-		}
-	}
-	g.P("}")
-	g.P("}")
-	g.P()
 
 	g.P()
 	g.P("// Client API for ", servName, " service")
@@ -209,7 +188,7 @@ func (g *micro) generateService(file *generator.FileDescriptor, service *pb.Serv
 			descExpr = fmt.Sprintf("&%s.Streams[%d]", serviceDescVar, streamIndex)
 			streamIndex++
 		}
-		g.generateClientMethod(serviceName, servName, serviceDescVar, method, descExpr)
+		g.generateClientMethod(pkg, serviceName, servName, serviceDescVar, method, descExpr)
 	}
 
 	g.P("// Server API for ", servName, " service")
@@ -246,13 +225,6 @@ func (g *micro) generateService(file *generator.FileDescriptor, service *pb.Serv
 	g.P(unexport(servName))
 	g.P("}")
 	g.P("h := &", unexport(servName), "Handler{hdlr}")
-	for _, method := range service.Method {
-		if method.Options != nil && proto.HasExtension(method.Options, options.E_Http) {
-			g.P("opts = append(opts, ", apiPkg, ".WithEndpoint(&", apiPkg, ".Endpoint{")
-			g.generateEndpoint(servName, method)
-			g.P("}))")
-		}
-	}
 	g.P("return s.Handle(s.NewHandler(&", servName, "{h}, opts...))")
 	g.P("}")
 	g.P()
@@ -275,10 +247,7 @@ func (g *micro) generateEndpoint(servName string, method *pb.MethodDescriptorPro
 		return
 	}
 	// http rules
-	r, err := proto.GetExtension(method.Options, options.E_Http)
-	if err != nil {
-		return
-	}
+	r := proto.GetExtension(method.Options, options.E_Http)
 	rule := r.(*options.HttpRule)
 	var meth string
 	var path string
@@ -306,9 +275,6 @@ func (g *micro) generateEndpoint(servName string, method *pb.MethodDescriptorPro
 	g.P("Name:", fmt.Sprintf(`"%s.%s",`, servName, method.GetName()))
 	g.P("Path:", fmt.Sprintf(`[]string{"%s"},`, path))
 	g.P("Method:", fmt.Sprintf(`[]string{"%s"},`, meth))
-	if len(rule.GetGet()) == 0 {
-		g.P("Body:", fmt.Sprintf(`"%s",`, rule.GetBody()))
-	}
 	if method.GetServerStreaming() || method.GetClientStreaming() {
 		g.P("Stream: true,")
 	}
@@ -334,8 +300,12 @@ func (g *micro) generateClientSignature(servName string, method *pb.MethodDescri
 	return fmt.Sprintf("%s(ctx %s.Context%s, opts ...%s.CallOption) (%s, error)", methName, contextPkg, reqArg, clientPkg, respName)
 }
 
-func (g *micro) generateClientMethod(reqServ, servName, serviceDescVar string, method *pb.MethodDescriptorProto, descExpr string) {
+func (g *micro) generateClientMethod(pkg, reqServ, servName, serviceDescVar string, method *pb.MethodDescriptorProto, descExpr string) {
 	reqMethod := fmt.Sprintf("%s.%s", servName, method.GetName())
+	useGrpc := g.gen.Param["use_grpc"]
+	if useGrpc != "" {
+		reqMethod = fmt.Sprintf("/%s.%s/%s", pkg, servName, method.GetName())
+	}
 	methName := generator.CamelCase(method.GetName())
 	inType := g.typeName(method.GetInputType())
 	outType := g.typeName(method.GetOutputType())
@@ -366,6 +336,8 @@ func (g *micro) generateClientMethod(reqServ, servName, serviceDescVar string, m
 
 	if !method.GetClientStreaming() {
 		g.P("if err := stream.Send(in); err != nil { return nil, err }")
+		// TODO: currently only grpc support CloseSend
+		// g.P("if err := stream.CloseSend(); err != nil { return nil, err }")
 	}
 
 	g.P("return &", streamType, "{stream}, nil")
@@ -380,13 +352,8 @@ func (g *micro) generateClientMethod(reqServ, servName, serviceDescVar string, m
 	g.P("Context() context.Context")
 	g.P("SendMsg(interface{}) error")
 	g.P("RecvMsg(interface{}) error")
-
-	if genSend && !genRecv {
-		// client streaming, the server will send a response upon close
-		g.P("CloseAndRecv() (*", outType, ", error)")
-	} else {
-		g.P("Close() error")
-	}
+	g.P("CloseSend() error")
+	g.P("Close() error")
 
 	if genSend {
 		g.P("Send(*", inType, ") error")
@@ -402,23 +369,15 @@ func (g *micro) generateClientMethod(reqServ, servName, serviceDescVar string, m
 	g.P("}")
 	g.P()
 
-	if genSend && !genRecv {
-		// client streaming, the server will send a response upon close
-		g.P("func (x *", streamType, ") CloseAndRecv() (*", outType, ", error) {")
-		g.P("if err := x.stream.Close(); err != nil {")
-		g.P("return nil, err")
-		g.P("}")
-		g.P("r := new(", outType, ")")
-		g.P("err := x.RecvMsg(r)")
-		g.P("return r, err")
-		g.P("}")
-		g.P()
-	} else {
-		g.P("func (x *", streamType, ") Close() error {")
-		g.P("return x.stream.Close()")
-		g.P("}")
-		g.P()
-	}
+	g.P("func (x *", streamType, ") CloseSend() error {")
+	g.P("return x.stream.CloseSend()")
+	g.P("}")
+	g.P()
+
+	g.P("func (x *", streamType, ") Close() error {")
+	g.P("return x.stream.Close()")
+	g.P("}")
+	g.P()
 
 	g.P("func (x *", streamType, ") Context() context.Context {")
 	g.P("return x.stream.Context()")
@@ -514,13 +473,7 @@ func (g *micro) generateServerMethod(servName string, method *pb.MethodDescripto
 	g.P("Context() context.Context")
 	g.P("SendMsg(interface{}) error")
 	g.P("RecvMsg(interface{}) error")
-
-	if !genSend {
-		// client streaming, the server will send a response upon close
-		g.P("SendAndClose(*", outType, ")  error")
-	} else {
-		g.P("Close() error")
-	}
+	g.P("Close() error")
 
 	if genSend {
 		g.P("Send(*", outType, ") error")
@@ -538,22 +491,10 @@ func (g *micro) generateServerMethod(servName string, method *pb.MethodDescripto
 	g.P("}")
 	g.P()
 
-	if !genSend {
-		// client streaming, the server will send a response upon close
-		g.P("func (x *", streamType, ") SendAndClose(in *", outType, ") error {")
-		g.P("if err := x.SendMsg(in); err != nil {")
-		g.P("return err")
-		g.P("}")
-		g.P("return x.stream.Close()")
-		g.P("}")
-		g.P()
-	} else {
-		// other types of rpc don't send a response when the stream closes
-		g.P("func (x *", streamType, ") Close() error {")
-		g.P("return x.stream.Close()")
-		g.P("}")
-		g.P()
-	}
+	g.P("func (x *", streamType, ") Close() error {")
+	g.P("return x.stream.Close()")
+	g.P("}")
+	g.P()
 
 	g.P("func (x *", streamType, ") Context() context.Context {")
 	g.P("return x.stream.Context()")

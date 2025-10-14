@@ -20,14 +20,15 @@
 
 title: Micro
 email: asim@micro.mu
-description: >- # this means to ignore newlines until "baseurl:"
-  Website and docs for the open source development framework Micro
+description: "Micro - The microservices platform"
 baseurl: "" # the subpath of your site, e.g. /blog
 url: "" # the base hostname & protocol for your site, e.g. http://example.com
-twitter_username: microhq
+twitter_username: _asimaslam
 github_username:  micro
-google_analytics: "UA-70478210-1"
-logo: "/images/logo.png"
+github: "https://github.com/micro"
+discord: "https://discord.gg/UmFkPbu32m"
+google_analytics: "G-R7R0EC6LWK"
+#logo: "/images/logo.png"
 
 # Pagination
 paginate: 15

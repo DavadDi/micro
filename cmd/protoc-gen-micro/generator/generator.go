@@ -1,7 +1,7 @@
 // Go support for Protocol Buffers - Google's data interchange format
 //
 // Copyright 2010 The Go Authors.  All rights reserved.
-// https://github.com/golang/protobuf
+// https://google.golang.org/protobuf
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
@@ -30,9 +30,9 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /*
-	The code generator for the plugin for the Google protocol buffer compiler.
-	It generates Go code from the protocol buffer description files read by the
-	main routine.
+The code generator for the plugin for the Google protocol buffer compiler.
+It generates Go code from the protocol buffer description files read by the
+main routine.
 */
 package generator
 
@@ -57,16 +57,14 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/protoc-gen-go/descriptor"
-	plugin "github.com/golang/protobuf/protoc-gen-go/plugin"
+	"google.golang.org/protobuf/proto"
+	descriptor "google.golang.org/protobuf/types/descriptorpb"
+	plugin "google.golang.org/protobuf/types/pluginpb"
 )
 
-// generatedCodeVersion indicates a version of the generated code.
-// It is incremented whenever an incompatibility between the generated code and
-// proto package is introduced; the generated code references
-// a constant, proto.ProtoPackageIsVersionN (where N is generatedCodeVersion).
-const generatedCodeVersion = 3
+// SupportedFeatures used to signaling that code generator supports proto3 optional
+// https://github.com/protocolbuffers/protobuf/blob/master/docs/implementing_proto3_presence.md#signaling-that-your-code-generator-supports-proto3-optional
+var SupportedFeatures = uint64(plugin.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
 
 // A Plugin provides functionality to add to the output during Go code generation,
 // such as to produce RPC stubs.
@@ -307,7 +305,7 @@ func (d *FileDescriptor) goPackageOption() (impPath GoImportPath, pkg GoPackageN
 }
 
 // goFileName returns the output name for the generated Go file.
-func (d *FileDescriptor) goFileName(pathType pathType) string {
+func (d *FileDescriptor) goFileName(pathType pathType, moduleRoot string) string {
 	name := *d.Name
 	if ext := path.Ext(name); ext == ".proto" || ext == ".protodevel" {
 		name = name[:len(name)-len(ext)]
@@ -321,9 +319,18 @@ func (d *FileDescriptor) goFileName(pathType pathType) string {
 	// Does the file have a "go_package" option?
 	// If it does, it may override the filename.
 	if impPath, _, ok := d.goPackageOption(); ok && impPath != "" {
-		// Replace the existing dirname with the declared import path.
-		_, name = path.Split(name)
-		name = path.Join(string(impPath), name)
+		if pathType == pathModuleRoot && moduleRoot != "" {
+			root := moduleRoot
+			if !strings.HasSuffix(root, "/") {
+				root = root + "/"
+			}
+			name = strings.TrimPrefix(name, root)
+		} else {
+			// Replace the existing dirname with the declared import path.
+			_, name = path.Split(name)
+			name = path.Join(string(impPath), name)
+		}
+
 		return name
 	}
 
@@ -407,6 +414,7 @@ type Generator struct {
 	PackageImportPath string            // Go import path of the package we're generating code for
 	ImportPrefix      string            // String to prefix to imported package file names.
 	ImportMap         map[string]string // Mapping from .proto file name to import path
+	ModuleRoot        string            // Mapping from the module prefix
 
 	Pkg map[string]string // The names under which we import support packages
 
@@ -431,6 +439,7 @@ type pathType int
 const (
 	pathTypeImport pathType = iota
 	pathTypeSourceRelative
+	pathModuleRoot
 )
 
 // New creates a new generator and allocates the request and response protobufs.
@@ -477,11 +486,20 @@ func (g *Generator) CommandLineParameters(parameter string) {
 			g.ImportPrefix = v
 		case "import_path":
 			g.PackageImportPath = v
+		case "module":
+			if g.pathType == pathTypeSourceRelative {
+				g.Fail(fmt.Sprintf(`Cannot set  module=%q after paths=source_relative`, v))
+			}
+			g.pathType = pathModuleRoot
+			g.ModuleRoot = v
 		case "paths":
 			switch v {
 			case "import":
 				g.pathType = pathTypeImport
 			case "source_relative":
+				if g.pathType == pathModuleRoot {
+					g.Fail("Cannot set paths=source_relative after setting module=<module_root>")
+				}
 				g.pathType = pathTypeSourceRelative
 			default:
 				g.Fail(fmt.Sprintf(`Unknown path type %q: want "import" or "source_relative".`, v))
@@ -1071,12 +1089,13 @@ func (g *Generator) GenerateAllFiles() {
 		if !g.writeOutput {
 			continue
 		}
-		fname := file.goFileName(g.pathType)
+		fname := file.goFileName(g.pathType, g.ModuleRoot)
 		g.Response.File = append(g.Response.File, &plugin.CodeGeneratorResponse_File{
 			Name:    proto.String(fname),
 			Content: proto.String(g.String()),
 		})
 	}
+	g.Response.SupportedFeatures = proto.Uint64(SupportedFeatures)
 }
 
 // Run all the plugins associated with the file.
@@ -1097,13 +1116,6 @@ func (g *Generator) generate(file *FileDescriptor) {
 	for name := range globalPackageNames {
 		g.usedPackageNames[name] = true
 	}
-
-	g.P("// This is a compile-time assertion to ensure that this generated file")
-	g.P("// is compatible with the proto package it is being compiled against.")
-	g.P("// A compilation error at this line likely means your copy of the")
-	g.P("// proto package needs to be updated.")
-	g.P("const _ = ", g.Pkg["proto"], ".ProtoPackageIsVersion", generatedCodeVersion, " // please upgrade the proto package")
-	g.P()
 
 	for _, td := range g.file.imp {
 		g.generateImported(td)
@@ -1246,7 +1258,7 @@ func (g *Generator) generateImports() {
 	g.P("import (")
 	g.P(g.Pkg["fmt"] + ` "fmt"`)
 	g.P(g.Pkg["math"] + ` "math"`)
-	g.P(g.Pkg["proto"]+" ", GoImportPath(g.ImportPrefix)+"github.com/golang/protobuf/proto")
+	g.P(g.Pkg["proto"]+" ", GoImportPath(g.ImportPrefix)+"google.golang.org/protobuf/proto")
 	for importPath, packageName := range imports {
 		g.P(packageName, " ", GoImportPath(g.ImportPrefix)+importPath)
 	}
@@ -1380,6 +1392,7 @@ func (g *Generator) generateEnum(enum *EnumDescriptor) {
 // The tag is a string like "varint,2,opt,name=fieldname,def=7" that
 // identifies details of the field for the protocol buffer marshaling and unmarshaling
 // code.  The fields are:
+//
 //	wire encoding
 //	protocol tag number
 //	opt,req,rep for optional, required, or repeated
@@ -1388,6 +1401,7 @@ func (g *Generator) generateEnum(enum *EnumDescriptor) {
 //	enum= the name of the enum type if it is an enum-typed field.
 //	proto3 if this field is in a proto3 message
 //	def= string representation of the default value, if any.
+//
 // The default value must be in a representation that can be used at run-time
 // to generate the default value. Thus bools become 0 and 1, for instance.
 func (g *Generator) goTag(message *Descriptor, field *descriptor.FieldDescriptorProto, wiretype string) string {
@@ -2638,7 +2652,7 @@ func dottedSlice(elem []string) string { return strings.Join(elem, ".") }
 
 // Is this field optional?
 func isOptional(field *descriptor.FieldDescriptorProto) bool {
-	return field.Label != nil && *field.Label == descriptor.FieldDescriptorProto_LABEL_OPTIONAL
+	return *field.Proto3Optional
 }
 
 // Is this field required?

@@ -41,7 +41,7 @@ getSystemInfo() {
 }
 
 checkSupported() {
-    local supported_osarch=(darwin-amd64 linux-amd64 linux-arm7 linux-arm64)
+    local supported_osarch=(darwin-amd64 darwin-arm64 linux-amd64 linux-arm7 linux-arm64)
     local machine_osarch="${OS}-${ARCH}"
 
     echo "Checking machine system support"
@@ -144,6 +144,21 @@ installFile() {
     fi
 }
 
+installProtocPlugins() {
+    echo "Installing protoc-gen-go and protoc-gen-micro..."
+    go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+    go install github.com/micro/micro/v5/cmd/protoc-gen-micro@latest
+
+    echo "Checking for protoc-gen-openapi..."
+    if ! command -v protoc-gen-openapi &> /dev/null; then
+        echo "protoc-gen-openapi not found in this repository."
+        echo "If you need OpenAPI support, install it from https://github.com/google/gnostic/tree/main/plugins/openapi"
+        echo "Example: go install github.com/google/gnostic/plugins/protoc-gen-openapi@latest"
+    else
+        echo "protoc-gen-openapi is already installed."
+    fi
+}
+
 fail_trap() {
     result=$?
     if [ "$result" != "0" ]; then
@@ -168,4 +183,5 @@ checkSupported
 checkHttpClient
 getLatestRelease
 installFile
+installProtocPlugins
 cleanup
